@@ -20,6 +20,7 @@ from vllm.v1.kv_cache_interface import MambaSpec
 
 from tests.stub_runner import (
     NEMOTRON_H_TINY_ARGS,
+    make_bailing_hybrid_plan,
     make_gdn_hybrid_plan,
     make_nemotron_hybrid_plan,
 )
@@ -241,6 +242,38 @@ class TestStateFamilyFactory:
 
         with pytest.raises(ValueError, match="must be positive integers"):
             build_hybrid_runtime_plan(args, 8, STATE_DTYPES)
+
+    def test_routes_bailing_args_to_the_kda_family(self) -> None:
+        plan = make_bailing_hybrid_plan(5)
+
+        assert plan.family.label == "kda"
+        assert plan.layers.attention_indices == (1, 3, 4)
+
+
+class TestBailingPlan:
+    def test_incomplete_tail_uses_mla(self) -> None:
+        plan = make_bailing_hybrid_plan(5)
+
+        assert plan.layers.attention_indices == (1, 3, 4)
+        assert plan.layers.state_indices == (0, 2)
+
+    def test_non_v3_architecture_rejects(self) -> None:
+        with pytest.raises(NotImplementedError, match="BailingMoeV3ForCausalLM"):
+            make_bailing_hybrid_plan(4, architectures=["BailingMoeForCausalLM"])
+
+    @pytest.mark.parametrize(
+        ("name", "value", "error"),
+        [
+            ("short_conv_kernel_size", None, ValueError),
+            ("no_kda_lora", False, NotImplementedError),
+            ("kda_safe_gate", False, NotImplementedError),
+        ],
+    )
+    def test_unsupported_config_rejects_at_the_family_boundary(
+        self, name: str, value: object, error: type[Exception]
+    ) -> None:
+        with pytest.raises(error, match=name):
+            make_bailing_hybrid_plan(4, **{name: value})
 
 
 class TestNemotronHPlanDecision:

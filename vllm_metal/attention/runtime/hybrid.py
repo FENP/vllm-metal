@@ -15,8 +15,10 @@ import mlx.nn as nn
 from vllm.logger import init_logger
 
 from vllm_metal.attention.caches.kv_cache import MetalPagedKVCache
+from vllm_metal.attention.caches.mla_cache import MLAPagedLatentCache
 from vllm_metal.attention.caches.protocol import PagedStateCache
 from vllm_metal.attention.context import PagedAttentionContext
+from vllm_metal.attention.impls.mla import MLAPagedAttentionWrapper
 from vllm_metal.attention.impls.sdpa import is_sdpa
 from vllm_metal.attention.impls.sdpa_wrapper import (
     SDPAPagedAttentionWrapper,
@@ -79,8 +81,10 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
         self._scheduler_group_indices = (0,)
         self._group_block_sizes = (block_size,)
 
-    def initialize(self, num_blocks: int) -> None:
-        self._cache = MetalPagedKVCache(
+    def _create_attention_cache(
+        self, num_blocks: int
+    ) -> MetalPagedKVCache | MLAPagedLatentCache:
+        return MetalPagedKVCache(
             num_layers=self._hybrid_plan.layers.num_attention,
             num_kv_heads=self._num_kv_heads,
             head_dim=self._head_dim,
@@ -91,6 +95,9 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
             k_quant=self._k_quant,
             v_quant=self._v_quant,
         )
+
+    def initialize(self, num_blocks: int) -> None:
+        self._cache = self._create_attention_cache(num_blocks)
 
         # Align-mode slabs are addressed directly by scheduler block id; any
         # of the pool's blocks can become a mamba state block (the block pool
@@ -120,7 +127,7 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
         )
 
         logger.info(
-            "Hybrid cache initialized: %d SDPA layers (%d blocks), "
+            "Hybrid cache initialized: %d attention layers (%d blocks), "
             "%d %s layers (%d/%d state slots allocated, mamba_cache_mode=%s)",
             self._hybrid_plan.layers.num_attention,
             num_blocks,
@@ -179,7 +186,7 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
         return self._group_block_sizes
 
     def patch_model(self, model: nn.Module) -> int:
-        kv_cache = self._require_initialized("patch_model")
+        self._require_initialized("patch_model")
         state_cache = self.state_cache
         layer_plan = self._hybrid_plan.layers
         state_family = self._hybrid_plan.family
@@ -200,17 +207,7 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
                     f"{state_family.label!r} state module."
                 )
             cache_idx = layer_plan.attention_cache_index(layer_idx)
-            if isinstance(attn, SDPAPagedAttentionWrapper):
-                attn.rebind_cache(kv_cache, self._block_size, cache_idx=cache_idx)
-                return attn
-            if is_sdpa(attn):
-                return SDPAPagedAttentionWrapper(
-                    attn, layer_idx, kv_cache, self._block_size, cache_idx=cache_idx
-                )
-            raise RuntimeError(
-                f"Hybrid patch_model: layer {layer_idx} is an attention layer in "
-                f"the hybrid plan but {type(attn).__name__} is not SDPA."
-            )
+            return self._wrap_attention_layer(layer_idx, attn, cache_idx)
 
         # Stateless layers keep their module; only plan-owned layers are probed.
         return walk_and_wrap(
@@ -220,8 +217,22 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
             attr_names=(*DEFAULT_ATTN_ATTR_NAMES, self._hybrid_plan.family.layer_name),
         )
 
+    def _wrap_attention_layer(self, layer_idx: int, attn: Any, cache_idx: int) -> Any:
+        kv_cache = self.kv_cache
+        if isinstance(attn, SDPAPagedAttentionWrapper):
+            attn.rebind_cache(kv_cache, self._block_size, cache_idx=cache_idx)
+            return attn
+        if is_sdpa(attn):
+            return SDPAPagedAttentionWrapper(
+                attn, layer_idx, kv_cache, self._block_size, cache_idx=cache_idx
+            )
+        raise RuntimeError(
+            f"Hybrid patch_model: layer {layer_idx} is an attention layer in "
+            f"the hybrid plan but {type(attn).__name__} is not SDPA."
+        )
+
     @property
-    def kv_cache(self) -> MetalPagedKVCache:
+    def kv_cache(self) -> MetalPagedKVCache | MLAPagedLatentCache:
         return self._require_initialized("kv_cache")
 
     @property
@@ -268,3 +279,29 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
 
     def materialize_pending_state(self) -> None:
         self.state_manager.materialize_pending_state()
+
+
+class BailingHybridPagedAttentionRuntime(HybridPagedAttentionRuntime):
+    """Hybrid state management with an MLA latent cache for attention layers."""
+
+    def _create_attention_cache(self, num_blocks: int) -> MLAPagedLatentCache:
+        return MLAPagedLatentCache(
+            num_layers=self._hybrid_plan.layers.num_attention,
+            latent_dim=self._head_dim,
+            num_blocks=num_blocks,
+            block_size=self._block_size,
+            dtype=self._dtype,
+        )
+
+    def _wrap_attention_layer(
+        self, layer_idx: int, attn: Any, cache_idx: int
+    ) -> MLAPagedAttentionWrapper:
+        latent_cache = self.kv_cache
+        if isinstance(attn, MLAPagedAttentionWrapper):
+            attn.rebind_cache(latent_cache, cache_idx=cache_idx)
+            return attn
+        return MLAPagedAttentionWrapper(attn, cache_idx, latent_cache)
+
+    @property
+    def kv_cache(self) -> MLAPagedLatentCache:
+        return self._require_initialized("kv_cache")

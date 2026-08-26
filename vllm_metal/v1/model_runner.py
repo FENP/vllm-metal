@@ -508,7 +508,6 @@ class MetalModelRunner:
         """
         return "kv_lora_rank" in self.model_args
 
-    @property
     def is_hybrid(self) -> bool:
         """Whether the model mixes attention layers with recurrent state layers."""
         return self.model_config.is_hybrid
