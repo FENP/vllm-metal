@@ -654,8 +654,8 @@ class ModelCachePolicy:
         )
         if len(group_indices) != 1:
             raise NotImplementedError(
-                "hybrid paged attention requires all SDPA layers to share one "
-                "scheduler KV group"
+                "hybrid paged attention requires all full-attention layers "
+                "to share one scheduler KV group"
             )
         group_index = group_indices[0]
         block_size = kv_cache_config.kv_cache_groups[

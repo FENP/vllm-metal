@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Contract tests for the hybrid runtime plan, its GDN family owner and the
-state-family factory."""
+"""Contract tests for the hybrid runtime plan and its state-family owners."""
 
 from __future__ import annotations
 

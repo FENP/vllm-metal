@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Paged SDPA and state-family execution for hybrid models.
+"""Paged attention runtimes for hybrid full and recurrent attention models.
 
-The family plan supplies layer roles, state geometry, allocation and wrappers.
-The runtime pairs its state cache with paged KV and the none/align lifecycle.
+Qwen hybrids combine SDPA with GDN linear attention. Bailing V3 combines MLA
+with KDA. Full-attention layers use paged KV or latent caches, while recurrent
+layers use scheduler-managed fixed-size state.
+
+The hybrid plan selects recurrent wrappers; subclasses select full-attention
+caches and wrappers.
 """
 
 from __future__ import annotations
@@ -33,7 +37,11 @@ logger = init_logger(__name__)
 
 
 class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
-    """Execute attention and state layers through their registered wrappers."""
+    """Shared hybrid state management with SDPA as the default attention path.
+
+    State geometry and wrappers come from the family plan. Subclasses override
+    attention cache allocation and wrapping without duplicating state handling.
+    """
 
     def __init__(
         self,
@@ -149,9 +157,9 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
     ) -> None:
         """Select the vLLM scheduler groups backing this runtime.
 
-        ``group_index`` is the group owning SDPA KV blocks (kernel block
-        tables); ``state_group_indices`` are the mamba cache groups whose
-        block ids key the operator state slabs;
+        ``group_index`` is the group owning full-attention cache blocks;
+        ``state_group_indices`` are the mamba cache groups whose block ids key
+        the recurrent state slabs;
         ``layer_group_ordinals[cache_idx]`` records which of those groups
         each state layer belongs to (the engine stripes same-spec layers
         across several groups) and ``layer_pool_ordinals[cache_idx]`` which
@@ -161,7 +169,7 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
         self._require_initialized("adopt_scheduler_group")
         if block_size != self._block_size:
             raise NotImplementedError(
-                "hybrid paged attention requires the SDPA scheduler group "
+                "hybrid paged attention requires the full-attention scheduler group "
                 f"block size to stay {self._block_size}, got {block_size}"
             )
         self._scheduler_group_indices = (group_index,)
@@ -176,12 +184,12 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
             self.state_cache.set_layer_layout(layer_group_ordinals, pool_ordinals)
 
     def kv_scheduler_group_indices(self) -> tuple[int, ...]:
-        """Return scheduler KV groups consumed by SDPA layers."""
+        """Return the scheduler group consumed by full-attention layers."""
         self._require_initialized("kv_scheduler_group_indices")
         return self._scheduler_group_indices
 
     def kv_group_block_sizes(self) -> tuple[int, ...]:
-        """Return SDPA scheduler group page sizes."""
+        """Return full-attention scheduler group page sizes."""
         self._require_initialized("kv_group_block_sizes")
         return self._group_block_sizes
 
@@ -251,7 +259,7 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
         return True
 
     def copy_blocks(self, block_copies: Sequence[tuple[int, int]]) -> None:
-        """Apply scheduler CoW copies to SDPA KV and align-mode state."""
+        """Apply scheduler CoW copies to paged and align-mode recurrent state."""
         self.kv_cache.copy_blocks(block_copies)
         if self._mamba_cache_mode == "align":
             self.state_cache.copy_blocks(block_copies)
