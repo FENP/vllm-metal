@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import mlx.core as mx
 import mlx.nn as nn
 import pytest
@@ -23,15 +25,20 @@ from tests.stub_runner import (
     make_gdn_hybrid_plan,
     make_nemotron_hybrid_plan,
 )
+from vllm_metal.attention.impls.kda import KDAPagedAttentionWrapper
 from vllm_metal.attention.impls.linear import GDNPagedAttentionWrapper
 from vllm_metal.attention.impls.mamba2 import Mamba2PagedStateWrapper
+from vllm_metal.attention.impls.mla import MLAPagedAttentionWrapper
 from vllm_metal.attention.impls.sdpa_wrapper import SDPAPagedAttentionWrapper
 from vllm_metal.attention.runtime.factory import build_hybrid_runtime_plan
 from vllm_metal.attention.runtime.families.gdn import build_gdn_hybrid_plan
 from vllm_metal.attention.runtime.families.nemotron_h import (
     build_nemotron_h_hybrid_plan,
 )
-from vllm_metal.attention.runtime.hybrid import HybridPagedAttentionRuntime
+from vllm_metal.attention.runtime.hybrid import (
+    HybridPagedAttentionRuntime,
+    MLAHybridPagedAttentionRuntime,
+)
 from vllm_metal.attention.runtime.hybrid_plan import (
     ATTENTION_LAYER,
     STATE_LAYER,
@@ -99,6 +106,26 @@ class _FakeModel(nn.Module):
         ]
 
 
+class _FakeBailingKDA(nn.Module):
+    q_proj = object()
+    k_proj = object()
+    v_proj = object()
+    q_conv1d = object()
+    k_conv1d = object()
+    v_conv1d = object()
+    projection_size = 4
+    conv_kernel_size = 2
+
+
+class _FakeBailingMLA(nn.Module):
+    pass
+
+
+class _FakeBailingLayer:
+    def __init__(self, attention: nn.Module) -> None:
+        self.attention = attention
+
+
 def _make_tiny_plan(state_dtypes=STATE_DTYPES) -> HybridRuntimePlan:
     """Four layers, attention at 1 and 3, geometry sized for the fakes."""
     return make_gdn_hybrid_plan(
@@ -133,6 +160,17 @@ def _make_runtime(state_dtypes=STATE_DTYPES) -> HybridPagedAttentionRuntime:
         max_num_seqs=2,
         num_kv_heads=1,
         head_dim=4,
+        block_size=4,
+        dtype=mx.float32,
+    )
+
+
+def _make_bailing_runtime(num_layers: int) -> MLAHybridPagedAttentionRuntime:
+    return MLAHybridPagedAttentionRuntime(
+        hybrid_plan=make_bailing_hybrid_plan(num_layers),
+        max_num_seqs=2,
+        num_kv_heads=1,
+        head_dim=6,
         block_size=4,
         dtype=mx.float32,
     )
@@ -472,6 +510,36 @@ class TestHybridPatchModel:
         assert gdn_2._gdn_cache_idx == 1
         assert gdn_0._gdn_state_cache is runtime.state_cache
         assert gdn_2._gdn_state_cache is runtime.state_cache
+
+    def test_bailing_interleaved_layers_use_compact_cache_indices(self) -> None:
+        runtime = _make_bailing_runtime(4)
+        runtime.initialize(num_blocks=3)
+        model = SimpleNamespace(
+            model=SimpleNamespace(
+                layers=[
+                    _FakeBailingLayer(_FakeBailingKDA()),
+                    _FakeBailingLayer(_FakeBailingMLA()),
+                    _FakeBailingLayer(_FakeBailingKDA()),
+                    _FakeBailingLayer(_FakeBailingMLA()),
+                ]
+            )
+        )
+
+        assert runtime.patch_model(model) == 4
+
+        layers = model.model.layers
+        assert all(
+            isinstance(layers[idx].attention, KDAPagedAttentionWrapper)
+            for idx in (0, 2)
+        )
+        assert all(
+            isinstance(layers[idx].attention, MLAPagedAttentionWrapper)
+            for idx in (1, 3)
+        )
+        assert [layers[idx].attention._kda_cache_idx for idx in (0, 2)] == [0, 1]
+        assert [layers[idx].attention._mla_layer_idx for idx in (1, 3)] == [0, 1]
+        assert runtime._cache.num_layers == 2
+        assert runtime.state_cache.num_layers == 2
 
     def test_repatch_rebinds_cached_wrappers_through_owner_methods(self) -> None:
         runtime_a = _make_runtime()

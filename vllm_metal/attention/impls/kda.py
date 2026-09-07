@@ -10,7 +10,7 @@ import mlx.nn as nn
 from mlx_lm.models.cache import ArraysCache
 
 from vllm_metal.attention.caches.gdn_cache import GDNPagedStateCache
-from vllm_metal.attention.context import PagedAttentionContext, get_context
+from vllm_metal.attention.context import get_context
 
 
 def is_bailing_kda(module: nn.Module) -> bool:
@@ -81,15 +81,9 @@ class KDAPagedAttentionWrapper(nn.Module):
         if cu_seqlens is None or len(cu_seqlens) < 2:
             raise RuntimeError("Bailing KDA wrapper requires cu_seqlens")
         num_requests = len(cu_seqlens) - 1
-        slot_ids = self._slot_ids(ctx)
-        if len(slot_ids) != num_requests:
-            raise RuntimeError("Bailing KDA wrapper requires one slot per request")
-        if len(set(slot_ids)) != len(slot_ids):
-            raise RuntimeError("Bailing KDA wrapper requires unique slots")
-
         state_cache = self._kda_state_cache
         cache_idx = self._kda_cache_idx
-        state_cache.require_allocated_slots(slot_ids)
+        slot_ids = state_cache.step_slot_ids(ctx, cache_idx, num_requests)
         state_cache.apply_pending_conv_state(cache_idx)
         state_cache.apply_pending_recurrent_state(cache_idx)
 
@@ -129,11 +123,3 @@ class KDAPagedAttentionWrapper(nn.Module):
             cache_idx, mx.concatenate(recurrent_updates, axis=0), slots
         )
         return mx.concatenate(outputs, axis=1)
-
-    def _slot_ids(self, ctx: PagedAttentionContext) -> list[int]:
-        if ctx.state_group_slot_mappings is not None:
-            ordinal = self._kda_state_cache.layer_group_ordinal(self._kda_cache_idx)
-            return ctx.state_group_slot_mappings[ordinal]
-        if ctx.state_slot_mapping is not None:
-            return ctx.state_slot_mapping
-        raise RuntimeError("Bailing KDA wrapper requires a state slot mapping")
