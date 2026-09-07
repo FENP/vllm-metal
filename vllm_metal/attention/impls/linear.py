@@ -118,7 +118,6 @@ class GDNPagedAttentionWrapper(nn.Module):
         state_cache: GDNPagedStateCache,
     ) -> None:
         super().__init__()
-        state_cache.require_mixer_dtype(inner.conv1d.weight.dtype, layer_idx=layer_idx)
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_gdn_layer_idx", layer_idx)
         object.__setattr__(self, "_gdn_cache_idx", cache_idx)
@@ -258,7 +257,9 @@ class GDNPagedAttentionWrapper(nn.Module):
 
         if defer_conv_state:
             state_cache.set_pending_conv_state(
-                cache_idx, slot_ids, mx.concatenate(conv_updates, axis=0)
+                cache_idx,
+                slot_ids,
+                mx.concatenate(conv_updates, axis=0).astype(state_cache.dtype),
             )
 
         return mx.concatenate(conv_outputs, axis=1)
@@ -412,9 +413,17 @@ class GDNPagedAttentionWrapper(nn.Module):
         d_v = inner.head_v_dim
 
         # Flatten for kernel: remove batch dim.
-        # Use float32 for kernel dispatch to avoid float16 overflow in
-        # recurrent state accumulation.  Output is cast back after.
-        kernel_dtype = mx.float32
+        # The native kernel uses one buffer dtype and accumulates in float32.
+        # Promote only as needed to preserve input, state, and output precision.
+        recurrent_pool = self._gdn_state_cache.recurrent_states[self._gdn_cache_idx]
+        kernel_dtype = mx.result_type(q, k, v, g, beta, recurrent_pool, state.x)
+        if recurrent_pool.dtype != kernel_dtype:
+            raise RuntimeError(
+                f"GDN fallback does not support {recurrent_pool.dtype} recurrent "
+                f"state with {kernel_dtype} kernel buffers. Set "
+                f"--mamba-ssm-cache-dtype {str(kernel_dtype).removeprefix('mlx.core.')} "
+                "to enable in-place state updates."
+            )
         q_flat = mx.contiguous(q.reshape(total_tokens, n_hk, d_k).astype(kernel_dtype))
         k_flat = mx.contiguous(k.reshape(total_tokens, n_hk, d_k).astype(kernel_dtype))
         v_flat = mx.contiguous(v.reshape(total_tokens, n_hv, d_v).astype(kernel_dtype))
@@ -426,7 +435,6 @@ class GDNPagedAttentionWrapper(nn.Module):
         slot_mapping = mx.array(state.slot_ids, dtype=mx.int32)
 
         y_flat = mx.zeros((total_tokens, n_hv, d_v), dtype=kernel_dtype)
-        recurrent_pool = self._gdn_state_cache.recurrent_states[self._gdn_cache_idx]
 
         mx.eval(
             q_flat,

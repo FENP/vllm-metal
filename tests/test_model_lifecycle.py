@@ -14,6 +14,7 @@ import pytest
 import torch
 from mlx_lm.models.nemotron_h import Model as NemotronHModel
 from mlx_lm.models.nemotron_h import ModelArgs as NemotronHModelArgs
+from vllm.model_executor.models import ModelRegistry
 
 import vllm_metal.envs as envs
 from tests.stub_runner import NEMOTRON_H_TINY_ARGS, make_stub_runner
@@ -58,6 +59,9 @@ def _runner_model_config(**overrides: object) -> object:
         "tokenizer": None,
         "tokenizer_revision": None,
         "is_hybrid": False,
+        "architecture": "Qwen3NextForCausalLM",
+        "model_impl": "vllm",
+        "registry": ModelRegistry,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -1181,10 +1185,66 @@ class TestResolveModelDims:
         return runner
 
     def test_hybrid_model_installs_its_family_plan(self) -> None:
-        runner = self._resolve(_GDN_HYBRID_ARGS, is_hybrid=True)
+        lifecycle, runner = _make_lifecycle(
+            model_args=_GDN_HYBRID_ARGS,
+            model_config=_runner_model_config(is_hybrid=True, dtype=torch.bfloat16),
+        )
+        runner.cache_config.mamba_ssm_cache_dtype = "auto"
+        lifecycle.resolve_model_dims()
 
         assert runner.hybrid_runtime_plan.family.label == "gdn"
         assert runner.hybrid_runtime_plan.layers.attention_indices == (3, 7)
+        assert runner.hybrid_runtime_plan.state_dtypes == (
+            torch.bfloat16,
+            torch.bfloat16,
+        )
+
+    def test_hybrid_state_dtypes_come_from_the_configured_registry(self) -> None:
+        state_dtypes = (torch.float32, torch.float32)
+        model_cls = SimpleNamespace(
+            get_mamba_state_dtype_from_config=lambda _: state_dtypes
+        )
+        registry = SimpleNamespace(
+            resolve_model_cls=lambda *_args, **_kwargs: (model_cls, "override")
+        )
+        lifecycle, runner = _make_lifecycle(
+            model_args=_GDN_HYBRID_ARGS,
+            model_config=_runner_model_config(is_hybrid=True, registry=registry),
+        )
+
+        lifecycle.resolve_model_dims()
+
+        assert runner.hybrid_runtime_plan.state_dtypes == state_dtypes
+
+    @pytest.mark.parametrize(
+        ("model_dtype", "conv_dtype", "ssm_dtype", "supported"),
+        [
+            (torch.bfloat16, "auto", "auto", True),
+            (torch.bfloat16, "auto", "float32", True),
+            (torch.float16, "auto", "auto", True),
+            (torch.float32, "auto", "auto", True),
+            (torch.bfloat16, "auto", "float16", False),
+            (torch.bfloat16, "float32", "bfloat16", False),
+            (torch.float32, "float16", "float16", False),
+        ],
+    )
+    def test_gdn_dtype_support_is_checked_at_initialization(
+        self, model_dtype, conv_dtype, ssm_dtype, supported
+    ) -> None:
+        lifecycle, runner = _make_lifecycle(
+            model_args=_GDN_HYBRID_ARGS,
+            model_config=_runner_model_config(is_hybrid=True, dtype=model_dtype),
+        )
+        runner.cache_config.mamba_cache_dtype = conv_dtype
+        runner.cache_config.mamba_ssm_cache_dtype = ssm_dtype
+
+        if supported:
+            lifecycle.resolve_model_dims()
+            assert runner.hybrid_runtime_plan is not None
+        else:
+            with pytest.raises(ValueError, match="--mamba-ssm-cache-dtype float32"):
+                lifecycle.resolve_model_dims()
+            assert runner.hybrid_runtime_plan is None
 
     def test_routing_follows_the_typed_field_not_the_args(self) -> None:
         runner = self._resolve(_GDN_HYBRID_ARGS, is_hybrid=False)
