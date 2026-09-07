@@ -289,8 +289,8 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
         self.state_manager.materialize_pending_state()
 
 
-class BailingHybridPagedAttentionRuntime(HybridPagedAttentionRuntime):
-    """Hybrid state management with an MLA latent cache for attention layers."""
+class MLAHybridPagedAttentionRuntime(HybridPagedAttentionRuntime):
+    """Hybrid state management with an MLA latent attention cache."""
 
     def _create_attention_cache(self, num_blocks: int) -> MLAPagedLatentCache:
         return MLAPagedLatentCache(

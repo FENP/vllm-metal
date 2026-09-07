@@ -131,9 +131,9 @@ class KDAPagedAttentionWrapper(nn.Module):
         return mx.concatenate(outputs, axis=1)
 
     def _slot_ids(self, ctx: PagedAttentionContext) -> list[int]:
-        if ctx.gdn_group_slot_mappings is not None:
+        if ctx.state_group_slot_mappings is not None:
             ordinal = self._kda_state_cache.layer_group_ordinal(self._kda_cache_idx)
-            return ctx.gdn_group_slot_mappings[ordinal]
-        if ctx.gdn_slot_mapping is not None:
-            return ctx.gdn_slot_mapping
+            return ctx.state_group_slot_mappings[ordinal]
+        if ctx.state_slot_mapping is not None:
+            return ctx.state_slot_mapping
         raise RuntimeError("Bailing KDA wrapper requires a state slot mapping")

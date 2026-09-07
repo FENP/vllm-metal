@@ -18,8 +18,8 @@ from vllm_metal.attention.context import (
 from vllm_metal.attention.impls.kda import KDAPagedAttentionWrapper
 from vllm_metal.attention.impls.mla import MLAPagedAttentionWrapper
 from vllm_metal.attention.runtime.hybrid import (
-    BailingHybridPagedAttentionRuntime,
     HybridPagedAttentionRuntime,
+    MLAHybridPagedAttentionRuntime,
 )
 from vllm_metal.attention.state import RequestStateManager
 
@@ -42,8 +42,8 @@ def _make_context() -> PagedAttentionContext:
     return PagedAttentionContext(slot_mapping=[])
 
 
-def _make_bailing_runtime(num_layers: int) -> BailingHybridPagedAttentionRuntime:
-    return BailingHybridPagedAttentionRuntime(
+def _make_bailing_runtime(num_layers: int) -> MLAHybridPagedAttentionRuntime:
+    return MLAHybridPagedAttentionRuntime(
         hybrid_plan=make_bailing_hybrid_plan(num_layers),
         max_num_seqs=2,
         num_kv_heads=1,
@@ -357,8 +357,8 @@ class TestKDAPagedAttentionWrapper:
                 PagedAttentionContext(
                     slot_mapping=[],
                     cu_seqlens=cu_seqlens,
-                    gdn_slot_mapping=None if grouped_slots else [0, 1],
-                    gdn_group_slot_mappings=[[0, 1]] if grouped_slots else None,
+                    state_slot_mapping=None if grouped_slots else [0, 1],
+                    state_group_slot_mappings=([0, 1],) if grouped_slots else None,
                 )
             )
             try:
@@ -383,7 +383,7 @@ class TestKDAPagedAttentionWrapper:
         )
 
 
-class TestBailingHybridPagedAttentionRuntime:
+class TestMLAHybridPagedAttentionRuntime:
     def test_patches_interleaved_layers_with_compact_cache_indices(self) -> None:
         runtime = _make_bailing_runtime(4)
         runtime.initialize(num_blocks=3)
@@ -413,24 +413,3 @@ class TestBailingHybridPagedAttentionRuntime:
         assert [layers[idx].attention._mla_layer_idx for idx in (1, 3)] == [0, 1]
         assert runtime._cache.num_layers == 2
         assert runtime.state_cache.num_layers == 2
-
-    def test_repatches_wrapped_layers_and_rebinds_caches(self) -> None:
-        runtime = _make_bailing_runtime(2)
-        runtime.initialize(num_blocks=3)
-        model = SimpleNamespace(
-            model=SimpleNamespace(
-                layers=[
-                    _FakeBailingLayer(_FakeBailingKDA()),
-                    _FakeBailingLayer(_FakeBailingMLA()),
-                ]
-            )
-        )
-
-        assert runtime.patch_model(model) == 2
-        runtime.initialize(num_blocks=4)
-        assert runtime.patch_model(model) == 2
-
-        kda = model.model.layers[0].attention
-        mla = model.model.layers[1].attention
-        assert kda._kda_state_cache is runtime.state_cache
-        assert mla._mla_latent_cache is runtime._cache

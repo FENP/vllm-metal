@@ -30,8 +30,8 @@ from vllm_metal.attention.caches.turboquant import (
     packed_dim,
 )
 from vllm_metal.attention.runtime.hybrid import (
-    BailingHybridPagedAttentionRuntime,
     HybridPagedAttentionRuntime,
+    MLAHybridPagedAttentionRuntime,
 )
 from vllm_metal.attention.runtime.hybrid_plan import HybridRuntimePlan
 from vllm_metal.attention.runtime.mha import MHAPagedAttentionRuntime
@@ -1016,12 +1016,12 @@ class ModelCachePolicy:
     def _build_hybrid_backend(self, block_size: int) -> HybridPagedAttentionRuntime:
         config = get_config()
         runtime_cls = HybridPagedAttentionRuntime
-        if self._runner.is_bailing_v3:
+        if self._runner.is_mla:
             if config.turboquant:
                 raise NotImplementedError(
-                    "TurboQuant is not supported for Bailing hybrid models"
+                    "TurboQuant is not supported for hybrid MLA models"
                 )
-            runtime_cls = BailingHybridPagedAttentionRuntime
+            runtime_cls = MLAHybridPagedAttentionRuntime
         return runtime_cls(
             hybrid_plan=self._hybrid_plan(),
             max_num_seqs=self._runner.scheduler_config.max_num_seqs,

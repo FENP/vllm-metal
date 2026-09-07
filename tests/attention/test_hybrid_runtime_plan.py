@@ -247,19 +247,10 @@ class TestStateFamilyFactory:
 
         assert plan.family.label == "kda"
         assert plan.layers.attention_indices == (1, 3, 4)
+        assert plan.layers.state_indices == (0, 2)
 
 
 class TestBailingPlan:
-    def test_incomplete_tail_uses_mla(self) -> None:
-        plan = make_bailing_hybrid_plan(5)
-
-        assert plan.layers.attention_indices == (1, 3, 4)
-        assert plan.layers.state_indices == (0, 2)
-
-    def test_non_v3_architecture_rejects(self) -> None:
-        with pytest.raises(NotImplementedError, match="BailingMoeV3ForCausalLM"):
-            make_bailing_hybrid_plan(4, architectures=["BailingMoeForCausalLM"])
-
     @pytest.mark.parametrize(
         ("name", "value", "error"),
         [
@@ -273,6 +264,10 @@ class TestBailingPlan:
     ) -> None:
         with pytest.raises(error, match=name):
             make_bailing_hybrid_plan(4, **{name: value})
+
+    def test_other_bailing_architecture_rejects(self) -> None:
+        with pytest.raises(NotImplementedError, match="BailingMoeV3ForCausalLM"):
+            make_bailing_hybrid_plan(4, architectures=["BailingMoeV2_5ForCausalLM"])
 
 
 class TestNemotronHPlanDecision:

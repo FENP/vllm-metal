@@ -208,6 +208,7 @@ def test_bailing_hybrid_emits_mla_and_kda_specs() -> None:
             "kv_lora_rank": 512,
             "layer_group_size": 2,
         },
+        is_hybrid=True,
         num_layers=2,
         hybrid_runtime_plan=make_bailing_hybrid_plan(
             2,

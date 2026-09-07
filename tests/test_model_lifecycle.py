@@ -707,7 +707,7 @@ class TestModelLifecycle:
         assert runner.hidden_size == 4096
         assert runner.kv_cache_dtype is not None
 
-    def test_load_preserves_hf_architectures_for_bailing_v3_detection(
+    def test_load_preserves_hf_architectures_for_state_family_detection(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -724,15 +724,16 @@ class TestModelLifecycle:
                 hf_config=SimpleNamespace(
                     model_type="bailing_hybrid",
                     architectures=["BailingMoeV3ForCausalLM"],
-                )
+                ),
+                is_hybrid=True,
             )
         )
 
         lifecycle.load()
 
         assert runner.model_args["architectures"] == ["BailingMoeV3ForCausalLM"]
-        assert runner.is_bailing_v3
         assert runner.is_hybrid
+        assert runner.hybrid_runtime_plan.family.label == "kda"
 
     def test_load_wires_gemma4_mtp_assistant_after_target_dims(
         self,
@@ -1457,9 +1458,8 @@ class TestResolveModelDims:
         assert runner.mla_latent_dim == expected_head_dim
 
     def test_bailing_v3_sets_mla_and_kda_cache_dims(self) -> None:
-        runner = self._resolve(_bailing_v3_args())
+        runner = self._resolve(_bailing_v3_args(), is_hybrid=True)
 
-        assert runner.is_bailing_v3
         assert runner.is_hybrid
         assert runner.is_mla
         assert runner.num_kv_heads == 1
@@ -1474,12 +1474,6 @@ class TestResolveModelDims:
         assert plan.geometry.value_head_dim == 128
         assert plan.geometry.conv_kernel_dim == 4
         assert plan.geometry.conv_dim == 3 * 16 * 128
-
-    def test_other_bailing_architecture_is_not_classified_as_v3(self) -> None:
-        _, runner = _make_lifecycle(
-            model_args=_bailing_v3_args(architectures=["BailingMoeV2_5ForCausalLM"])
-        )
-        assert not runner.is_bailing_v3
 
     def test_missing_dims_raise(self) -> None:
         lifecycle, _ = _make_lifecycle(model_args={"num_hidden_layers": 32})
