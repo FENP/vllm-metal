@@ -2071,18 +2071,19 @@ class TestV1MetalModelRunnerGDNLifecycle:
             mx.full((1, 1, 4, 32), 9, dtype=mx.float32),
         )
 
-        expected_output = object()
+        batch = mr._ExecutionBatch()
+        batch.add_output("done", [1])
         monkeypatch.setattr(
             runner,
             "_sample_paged_batch",
-            lambda grammar_output: (mr._ExecutionBatch(), object()),
+            lambda grammar_output: (batch, object()),
         )
         monkeypatch.setattr(runner, "_validate_scheduled_outputs", lambda *args: None)
-        monkeypatch.setattr(runner, "_build_output", lambda batch: expected_output)
 
         output = runner.sample_tokens(None)
 
-        assert output is expected_output
+        assert isinstance(output, ModelRunnerOutput)
+        assert output.req_ids == ["done"]
         assert not cache.has_pending_conv_state(0)
         assert not cache.has_pending_recurrent_state(0)
         mx.eval(cache.conv_states[0], cache.recurrent_states[0])
@@ -2629,9 +2630,10 @@ class TestPipelineGateSpecDecodeDerivation:
         )
 
     def test_prompt_logprobs_request_disables_pipeline(self) -> None:
-        # Arrange — a decode-phase request asking for prompt logprobs must
-        # keep the synchronous sample path (logprobs need eager logits).
+        # Arrange — an active prompt-logprobs request must keep the synchronous
+        # sample path until the prompt scores are delivered.
         runner = self._runner(drafter=None)
+        runner._prompt_logprobs_tracker.register("r0", 5)
         runner._request_states = {
             "r0": mr.RequestState(
                 token_ids=[1, 7],

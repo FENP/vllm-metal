@@ -25,6 +25,7 @@ from vllm_metal.v1.model_adapter import DefaultModelAdapter
 from vllm_metal.v1.pooling.backends.decoder.factory import (
     build_decoder_pooling_backend,
 )
+from vllm_metal.v1.prompt_logprobs import PromptLogprobsTracker
 from vllm_metal.v1.spec_decode import SpeculativeDecodeController
 from vllm_metal.v1.structured_output import MetalStructuredOutputApplier
 
@@ -62,6 +63,7 @@ def make_stub_runner(
         "model_config": SimpleNamespace(
             runner_type="generate",
             get_head_size=lambda: 128,
+            logprobs_mode="raw_logprobs",
             max_model_len=2048,
             is_hybrid=is_hybrid,
         ),
@@ -98,6 +100,7 @@ def make_stub_runner(
         "_sampler": None,
         "_native_sample_key": None,
         "_structured_output_applier": MetalStructuredOutputApplier(),
+        "_prompt_logprobs_tracker": PromptLogprobsTracker(),
         "_lora": MetalLoRARuntime(),
         "_yoco_cache_mapping": None,
         "model_args": _model_args,
@@ -127,7 +130,7 @@ def make_stub_runner(
     runner._cache_policy = ModelCachePolicy(runner, runner._model_adapter)
     if "_decode_pipeline" not in attrs:
         runner._decode_pipeline = DecodePipeline(
-            build_output=runner._build_output,
+            build_output=mr._ExecutionBatch.to_model_runner_output,
             validate=runner._validate_scheduled_outputs,
         )
 
