@@ -48,7 +48,7 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
         *,
         hybrid_plan: HybridRuntimePlan,
         max_num_seqs: int,
-        # SDPA dims
+        # Full-attention cache dimensions
         num_kv_heads: int,
         head_dim: int,
         # Common
@@ -56,7 +56,7 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
         dtype: mx.Dtype,
         # Scheduler-side mamba caching strategy.
         mamba_cache_mode: str = "none",
-        # TurboQuant (SDPA layers only)
+        # TurboQuant (SDPA attention only)
         turboquant: bool = False,
         k_quant: str | None = None,
         v_quant: str | None = None,
@@ -74,11 +74,11 @@ class HybridPagedAttentionRuntime(PagedAttentionRuntimeBase):
             )
         self._mamba_cache_mode = mamba_cache_mode
 
-        # SDPA params
+        # Full-attention cache parameters
         self._num_kv_heads = num_kv_heads
         self._head_dim = head_dim
 
-        # TurboQuant params (only applies to SDPA layers)
+        # TurboQuant parameters (SDPA attention only)
         self._turboquant = turboquant
         self._k_quant = k_quant
         self._v_quant = v_quant

@@ -87,17 +87,9 @@ end-to-end on Qwen3-0.6B Q4_1 and on Qwen3-0.6B,
 Llama-3.2-1B-Instruct, and Mistral-7B-Instruct-v0.3 Q8_0
 ([#415](https://github.com/vllm-project/vllm-metal/issues/415)).
 
-Ling-3.0 requires
-[vLLM 0.28.0](https://github.com/vllm-project/vllm/releases/tag/v0.28.0) or
-later, which includes its
-[Bailing V3 model support](https://github.com/vllm-project/vllm/pull/51045).
-Its MLX-LM implementation landed in
-[mlx-lm#1711](https://github.com/ml-explore/mlx-lm/pull/1711). Supported weight
-formats are BF16 and MLX-native MXFP8 converted from the BF16 checkpoint. The
-official serialized block-FP8 checkpoint is not loaded directly. Ling-3.0 Tiny
-has been validated end to end. Due to resource constraints, Flash has only
-been validated at the configuration and direct-Q model-structure level; its
-full checkpoint weights were not loaded.
+Ling-3.0 Tiny supports the official BF16 checkpoint and MLX-native MXFP8
+checkpoints converted from it. Direct loading of the official serialized
+block-FP8 checkpoint is not supported.
 
 | Model | Support | Attention Kernel | Automatic Prefix Cache | Example checkpoint |
 | --- | --- | --- | --- | --- |

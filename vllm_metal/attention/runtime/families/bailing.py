@@ -56,7 +56,6 @@ BAILING_FAMILY = StateFamilySpec(
     # KDA uses the same scheduler state layout as GDN, not its compute kernel.
     mamba_type=MambaAttentionBackendEnum.GDN_ATTN,
     supported_cache_modes=("none", "align"),
-    supports_decode_pipeline=False,
     layer_name="linear_attn",
     create_state_cache=_create_kda_state_cache,
 )
@@ -94,6 +93,12 @@ def build_bailing_hybrid_plan(
             raise NotImplementedError(f"Bailing V3 requires {name}=true")
 
     group_size = model_args["layer_group_size"]
+    if not 2 <= group_size <= num_layers:
+        raise ValueError(
+            "Bailing V3 hybrid requires 2 <= layer_group_size <= num_layers so "
+            "the model keeps both MLA and KDA layers, got "
+            f"layer_group_size={group_size} with num_layers={num_layers}."
+        )
     grouped_layers = num_layers // group_size * group_size
     num_heads = model_args["num_attention_heads"]
     head_dim = model_args["head_dim"]

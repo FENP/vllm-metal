@@ -307,6 +307,13 @@ class TestBailingPlan:
         with pytest.raises(NotImplementedError, match="BailingMoeV3ForCausalLM"):
             make_bailing_hybrid_plan(4, architectures=["BailingMoeV2_5ForCausalLM"])
 
+    @pytest.mark.parametrize(
+        "group_size", [1, 5], ids=["unit_group", "group_exceeds_layers"]
+    )
+    def test_group_size_dropping_a_layer_role_rejects(self, group_size: int) -> None:
+        with pytest.raises(ValueError, match="2 <= layer_group_size <= num_layers"):
+            make_bailing_hybrid_plan(4, layer_group_size=group_size)
+
 
 class TestNemotronHPlanDecision:
     def test_string_pattern_reads_as_characters(self) -> None:
