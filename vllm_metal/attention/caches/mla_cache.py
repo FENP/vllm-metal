@@ -56,25 +56,27 @@ class MLAPagedLatentCache:
             latent_tensors.append(latent.squeeze(2))
         cache.latent_caches = storage.views(latent_tensors)
         cache.dtype = cache.latent_caches[0].dtype
+        cache.has_dense_pages = all(tensor.is_contiguous() for tensor in latent_tensors)
         cache._storage = storage
         return cache
 
     def write_slots(self, layer_idx: int, slot_ids: mx.array, values: mx.array) -> None:
         """Scatter latent rows, preserving upstream storage aliases."""
-        flat = self.latent_caches[layer_idx].reshape(-1, self.latent_dim)
         if self._storage is None:
+            flat = self.latent_caches[layer_idx].reshape(-1, self.latent_dim)
             flat[slot_ids] = values
+            updated = flat.reshape(self.num_blocks, self.block_size, self.latent_dim)
         else:
             from vllm_metal.metal import get_ops
 
-            flat = get_ops().gdn_state_scatter(
-                flat,
-                values.astype(flat.dtype),
+            # Flattening padded pages would copy and detach the shared backing.
+            updated = get_ops().gdn_state_scatter(
+                self.latent_caches[layer_idx],
+                values.astype(self.dtype),
                 slot_ids.astype(mx.int32),
+                paged=True,
             )
-        self.latent_caches[layer_idx] = flat.reshape(
-            self.num_blocks, self.block_size, self.latent_dim
-        )
+        self.latent_caches[layer_idx] = updated
 
     def __init__(
         self,
@@ -94,6 +96,7 @@ class MLAPagedLatentCache:
         self.num_blocks = num_blocks
         self.block_size = block_size
         self.dtype = dtype
+        self.has_dense_pages = True
         self._storage = None
 
         self.latent_caches: list[mx.array] = []

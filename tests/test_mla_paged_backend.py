@@ -12,9 +12,11 @@ import pytest
 from mlx_lm.models.base import scaled_dot_product_attention
 
 import vllm_metal.attention.runtime.mla as mla_runtime
+from tests.stub_runner import initialize_hybrid_runtime, make_bailing_hybrid_plan
 from vllm_metal.attention import context as pac
 from vllm_metal.attention.caches.mla_cache import MLAPagedLatentCache
 from vllm_metal.attention.impls.mla import MLAPagedAttentionWrapper
+from vllm_metal.attention.runtime.hybrid import HybridPagedAttentionRuntime
 from vllm_metal.attention.runtime.mla import MLAPagedAttentionRuntime
 from vllm_metal.attention.runtime.protocol import PagedAttentionRuntime
 
@@ -750,6 +752,24 @@ class TestSinglePassRouting:
                 wrapper._inner, wrapper._mla_latent_cache, _make_decode_ctx()
             )
             is True
+        )
+
+    @pytest.mark.parametrize("padded", [False, True])
+    def test_shared_cache_requires_dense_pages(self, monkeypatch, padded) -> None:
+        monkeypatch.setattr("vllm_metal.envs.VLLM_METAL_MLA_KERNEL", True)
+        runtime = HybridPagedAttentionRuntime(
+            hybrid_plan=make_bailing_hybrid_plan(2, head_dim=128 if padded else 4),
+            dtype=mx.float16,
+        )
+        initialize_hybrid_runtime(
+            runtime, 2, block_size=16, head_dim=_LATENT_DIM, mla=True
+        )
+        cache = runtime.kv_cache
+        wrapper = MLAPagedAttentionWrapper(_KernelDimsAbsorbedInner(), 0, cache)
+
+        assert (
+            wrapper._can_use_kernel(wrapper._inner, cache, _make_decode_ctx())
+            is not padded
         )
 
     def test_non_absorbed_rejects(self, monkeypatch) -> None:

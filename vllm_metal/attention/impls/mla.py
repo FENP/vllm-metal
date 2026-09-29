@@ -348,6 +348,8 @@ class MLAPagedAttentionWrapper(nn.Module):
         if latent_cache.dtype not in (mx.float16, mx.bfloat16):
             dtype = str(latent_cache.dtype).rsplit(".", 1)[-1]
             return f"{dtype} cache, the kernel takes float16 or bfloat16"
+        if not latent_cache.has_dense_pages:
+            return "the kernel requires dense latent-cache pages"
         return None
 
     def decode_kernel_mismatch(self) -> str | None:

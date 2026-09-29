@@ -500,16 +500,20 @@ class TestHybridPatchModel:
         assert runtime.state_cache.conv_states.storage is runtime.storage
         assert runtime.state_cache.recurrent_states.storage is runtime.storage
 
-        slot_ids = mx.array([1, 6], dtype=mx.int32)
-        expected = mx.arange(24, dtype=mx.float32).reshape(2, 12)
-        runtime.kv_cache.write_slots(0, slot_ids, expected)
-        rebound = MLAPagedLatentCache.from_upstream(
-            runtime.storage, ["layers.1.self_attn"]
-        )
-        actual = rebound.latent_caches[0].reshape(-1, 12)[slot_ids]
-        mx.eval(actual)
+        expected = runtime.kv_cache.latent_caches[0] + 0
+        mx.eval(expected)
+        for slots, offset in (([1, 6], 0), ([6, 4, 5], 100)):
+            slot_ids = mx.array(slots, dtype=mx.int32)
+            values = (offset + mx.arange(len(slots) * 12)).reshape(-1, 12)
+            runtime.kv_cache.write_slots(0, slot_ids, values)
+            expected[slot_ids // 4, slot_ids % 4] = values
+            rebound = MLAPagedLatentCache.from_upstream(
+                runtime.storage, ["layers.1.self_attn"]
+            )
+            actual = rebound.latent_caches[0]
+            mx.eval(actual, expected)
 
-        assert bool(mx.array_equal(actual, expected))
+            assert bool(mx.array_equal(actual, expected))
 
     def test_repatch_rebinds_cached_wrappers_through_owner_methods(self) -> None:
         runtime_a = _make_runtime()
