@@ -831,6 +831,10 @@ class MetalModelRunner:
         self._draft_token_ids = None
         return draft_token_ids
 
+    @property
+    def tq_prefill_workspace_bytes(self) -> int:
+        return self._cache_policy.tq_prefill_workspace_bytes
+
     def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
         """Get KV cache specification.
 
@@ -1218,6 +1222,7 @@ class MetalModelRunner:
             prefill_info,
             self._paged_group_block_sizes,
             merge_verify_windows=self.merge_verify_windows,
+            tq_prefill_workspace_bytes=self.tq_prefill_workspace_bytes,
         )
         try:
             ctx = get_context()
