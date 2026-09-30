@@ -456,7 +456,7 @@ class TestHybridPatchModel:
         assert gdn_0._gdn_state_cache is runtime.state_cache
         assert gdn_2._gdn_state_cache is runtime.state_cache
 
-    def test_bailing_uses_shared_mla_and_kda_storage(self) -> None:
+    def test_bailing_patches_mla_and_kda_on_shared_storage(self) -> None:
         args = BailingModelArgs(
             hidden_size=16,
             num_hidden_layers=2,
@@ -499,21 +499,6 @@ class TestHybridPatchModel:
         assert runtime.kv_cache.latent_caches.storage is runtime.storage
         assert runtime.state_cache.conv_states.storage is runtime.storage
         assert runtime.state_cache.recurrent_states.storage is runtime.storage
-
-        expected = runtime.kv_cache.latent_caches[0] + 0
-        mx.eval(expected)
-        for slots, offset in (([1, 6], 0), ([6, 4, 5], 100)):
-            slot_ids = mx.array(slots, dtype=mx.int32)
-            values = (offset + mx.arange(len(slots) * 12)).reshape(-1, 12)
-            runtime.kv_cache.write_slots(0, slot_ids, values)
-            expected[slot_ids // 4, slot_ids % 4] = values
-            rebound = MLAPagedLatentCache.from_upstream(
-                runtime.storage, ["layers.1.self_attn"]
-            )
-            actual = rebound.latent_caches[0]
-            mx.eval(actual, expected)
-
-            assert bool(mx.array_equal(actual, expected))
 
     def test_repatch_rebinds_cached_wrappers_through_owner_methods(self) -> None:
         runtime_a = _make_runtime()

@@ -15,7 +15,7 @@ from vllm_metal.attention.context import (
 from vllm_metal.attention.impls.kda import KDAPagedAttentionWrapper
 
 
-def test_kda_paged_state_matches_mlx_lm_across_prefill_and_decode() -> None:
+def test_kda_paged_state_matches_mlx_lm_with_reordering_and_mixed_steps() -> None:
     mx.random.seed(17)
     args = ModelArgs(
         hidden_size=16,
@@ -39,16 +39,19 @@ def test_kda_paged_state_matches_mlx_lm_across_prefill_and_decode() -> None:
     wrapper = KDAPagedAttentionWrapper(inner, 0, 0, state_cache)
     references = [ArraysCache(size=4), ArraysCache(size=4)]
 
-    for cu_seqlens, grouped_slots, num_decode in (
-        ([0, 3, 5], False, 0),
-        ([0, 1, 2], True, 2),
+    for request_order, lengths, grouped_slots, num_decode in (
+        ((0, 1), (3, 2), False, 0),
+        ((1, 0), (1, 2), True, 1),
+        ((0, 1), (1, 1), False, 2),
     ):
+        cu_seqlens = [0, lengths[0], sum(lengths)]
+        slots = list(request_order)
         x = mx.random.normal((1, cu_seqlens[-1], args.hidden_size)).astype(mx.float32)
         expected = mx.concatenate(
             [
-                inner(x[:, start:end], cache=reference)
-                for start, end, reference in zip(
-                    cu_seqlens[:-1], cu_seqlens[1:], references, strict=True
+                inner(x[:, start:end], cache=references[request_idx])
+                for start, end, request_idx in zip(
+                    cu_seqlens[:-1], cu_seqlens[1:], request_order, strict=True
                 )
             ],
             axis=1,
@@ -58,8 +61,8 @@ def test_kda_paged_state_matches_mlx_lm_across_prefill_and_decode() -> None:
             PagedAttentionContext(
                 slot_mapping=[],
                 cu_seqlens=cu_seqlens,
-                state_slot_mapping=None if grouped_slots else [0, 1],
-                state_group_slot_mappings=([0, 1],) if grouped_slots else None,
+                state_slot_mapping=None if grouped_slots else slots,
+                state_group_slot_mappings=(slots,) if grouped_slots else None,
                 num_decode_requests=num_decode,
             )
         )

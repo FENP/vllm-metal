@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import mlx.core as mx
 import mlx.nn as nn
 import pytest
+import torch
 from mlx_lm.models.base import scaled_dot_product_attention
 
 import vllm_metal.attention.runtime.mla as mla_runtime
@@ -550,7 +551,7 @@ class TestMLAPagedAttentionWrapperPagedPath:
 
         assert bool(mx.allclose(out, expected, rtol=1e-3, atol=1e-3))
 
-    def test_bailing_prefill_and_decode_match_mlx_lm(self) -> None:
+    def test_bailing_shared_padded_cache_matches_mlx_lm(self) -> None:
         from mlx_lm.models.bailing_moe_v3 import BailingMLA, ModelArgs
         from mlx_lm.models.base import create_causal_mask
         from mlx_lm.models.cache import KVCache
@@ -569,13 +570,17 @@ class TestMLAPagedAttentionWrapperPagedPath:
         )
         inner = BailingMLA(args)
         reference_cache = KVCache()
-        paged_cache = MLAPagedLatentCache(
-            num_layers=1,
-            latent_dim=args.kv_lora_rank + args.qk_rope_head_dim,
-            num_blocks=2,
-            block_size=4,
+        runtime = HybridPagedAttentionRuntime(
+            hybrid_plan=make_bailing_hybrid_plan(
+                2, state_dtypes=(torch.float32, torch.float32)
+            ),
             dtype=mx.float32,
         )
+        initialize_hybrid_runtime(runtime, 3, block_size=4, head_dim=12, mla=True)
+        runtime.zero_blocks([0, 1, 2])
+        mx.eval(*runtime.storage.buffers)
+        paged_cache = runtime.kv_cache
+        assert not paged_cache.has_dense_pages
         wrapper = MLAPagedAttentionWrapper(inner, 0, paged_cache)
 
         def run_paged(tokens: mx.array, *, offset: int, context_len: int) -> mx.array:
@@ -583,7 +588,7 @@ class TestMLAPagedAttentionWrapperPagedPath:
             pac.set_context(
                 pac.PagedAttentionContext(
                     slot_mapping=list(range(offset, offset + num_tokens)),
-                    block_tables=[[0]],
+                    block_tables=[[0, 1]],
                     context_lens=[context_len],
                     offsets=[offset],
                     cu_seqlens=[0, num_tokens],
@@ -594,21 +599,28 @@ class TestMLAPagedAttentionWrapperPagedPath:
             finally:
                 pac.clear_context()
 
-        prefill = mx.random.normal((1, 3, args.hidden_size)).astype(mx.float32)
+        prefill = mx.random.normal((1, 5, args.hidden_size)).astype(mx.float32)
         expected_prefill = inner(
             prefill,
             mask=create_causal_mask(prefill.shape[1]),
             cache=reference_cache,
         )
-        actual_prefill = run_paged(prefill, offset=0, context_len=3)
+        actual_prefill = run_paged(prefill, offset=0, context_len=5)
 
         decode = mx.random.normal((1, 1, args.hidden_size)).astype(mx.float32)
         expected_decode = inner(decode, cache=reference_cache)
-        actual_decode = run_paged(decode, offset=3, context_len=4)
+        actual_decode = run_paged(decode, offset=5, context_len=6)
         mx.eval(actual_prefill, expected_prefill, actual_decode, expected_decode)
 
         assert bool(mx.allclose(actual_prefill, expected_prefill, rtol=1e-5, atol=1e-5))
         assert bool(mx.allclose(actual_decode, expected_decode, rtol=1e-5, atol=1e-5))
+        rebound = MLAPagedLatentCache.from_upstream(
+            runtime.storage, ["layers.1.self_attn"]
+        )
+        mx.eval(rebound.latent_caches[0])
+        assert bool(
+            mx.array_equal(rebound.latent_caches[0], paged_cache.latent_caches[0])
+        )
 
 
 # Single-pass kernel dimensions (matches mla.metal instantiation).
