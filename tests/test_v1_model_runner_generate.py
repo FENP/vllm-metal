@@ -1576,15 +1576,22 @@ class TestV1MetalModelRunnerExecuteModel:
         monkeypatch.setattr(runner, "_sample_paged_batch", fail)
         with pytest.raises(RuntimeError, match="failed to compile"):
             runner.sample_tokens(None)
+        # Diagnostic text only: the exception would keep the step's frames.
+        assert (
+            runner._sample_failure == "RuntimeError: logprobs kernel failed to compile"
+        )
 
         monkeypatch.setattr(
             runner,
             "_start_paged_forward",
             lambda *args, **kwargs: pytest.fail("the next step must not run"),
         )
-        with pytest.raises(RuntimeError, match="sample_tokens") as info:
+        with pytest.raises(
+            RuntimeError,
+            match=r"sample_tokens failed on the previous step "
+            r"\(RuntimeError: logprobs kernel failed to compile\)",
+        ):
             runner.execute_model(self._make_scheduler_output(["req-0"]))
-        assert info.value.__cause__ is cause
 
     def test_paged_cached_request_without_state_raises(self) -> None:
         runner = self._make_runner()
