@@ -7,7 +7,7 @@ import mlx.core as mx
 
 
 class MLAPagedLatentCache:
-    """Per-layer MLX arrays for MLA paged attention.
+    """Per-layer latent views for MLA paged attention.
 
     Each token's cache entry is a combined latent vector [kv_norm || k_pe]:
       - kv_norm = kv_a_layernorm(compressed_kv) — the normalised KV latent
@@ -15,7 +15,8 @@ class MLAPagedLatentCache:
 
     Layout per layer: [num_blocks, block_size, latent_dim].
 
-    Block allocation is managed externally by the scheduler's KV cache manager.
+    Standalone MLA allocates its own arrays; hybrid MLA binds views of the
+    scheduler-owned shared cache storage.
     """
 
     @classmethod

@@ -113,11 +113,6 @@ class _FakeModel(nn.Module):
         ]
 
 
-class _BailingLayer:
-    def __init__(self, attention: nn.Module) -> None:
-        self.attention = attention
-
-
 def _make_tiny_plan(state_dtypes=STATE_DTYPES) -> HybridRuntimePlan:
     """Four layers, attention at 1 and 3, geometry sized for the fakes."""
     return make_gdn_hybrid_plan(
@@ -477,12 +472,14 @@ class TestHybridPatchModel:
             ),
             dtype=mx.float32,
         )
-        initialize_hybrid_runtime(runtime, 2, head_dim=12, mla=True)
+        initialize_hybrid_runtime(
+            runtime, 2, head_dim=args.kv_lora_rank + args.qk_rope_head_dim, mla=True
+        )
         model = SimpleNamespace(
             model=SimpleNamespace(
                 layers=[
-                    _BailingLayer(BailingKDA(args)),
-                    _BailingLayer(BailingMLA(args)),
+                    SimpleNamespace(attention=BailingKDA(args)),
+                    SimpleNamespace(attention=BailingMLA(args)),
                 ]
             )
         )

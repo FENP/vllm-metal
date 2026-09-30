@@ -576,7 +576,13 @@ class TestMLAPagedAttentionWrapperPagedPath:
             ),
             dtype=mx.float32,
         )
-        initialize_hybrid_runtime(runtime, 3, block_size=4, head_dim=12, mla=True)
+        initialize_hybrid_runtime(
+            runtime,
+            3,
+            block_size=4,
+            head_dim=args.kv_lora_rank + args.qk_rope_head_dim,
+            mla=True,
+        )
         runtime.zero_blocks([0, 1, 2])
         mx.eval(*runtime.storage.buffers)
         paged_cache = runtime.kv_cache
